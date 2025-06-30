@@ -1,4 +1,9 @@
+# Amit Agarwal aka - 2025-05-10
+# Script to configure static IP on Windows Server
+
 # PowerShell Script for AD Setup and Vulnerabilities with Exploitation Hints
+
+Start-Transcript -Path "logfile_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Append
 
 # Set the domain name for the environment
 $DomainName = "lab.local"
@@ -6,9 +11,6 @@ $DomainNetbiosName = "LAB"
 $DomainAdminUsername = "Administrator"
 $DomainAdminPassword = "Adminstr@tor123" # Use a secure password
 $DCName = "Server2025"
-
-# Amit Agarwal aka - 2025-05-10
-# Script to configure static IP on Windows Server
 
 $InterfaceAlias = "Ethernet0"       # Or "Ethernet0", run Get-NetAdapter if unsure
 $IPAddress = "172.16.70.10"
@@ -147,7 +149,7 @@ function Install-ActiveDirectory {
   Install-WindowsFeature -Name AD-Domain-Services
 
   # Create the new forest and domain
-  Install-ADDSForest -DomainName $DomainName -DomainNetbiosName "LAB" -SafeModeAdministratorPassword (ConvertTo-SecureString $DomainAdminPassword -AsPlainText -Force) -InstallDNS -DomainNetbiosName $DomainNetbiosName
+  Install-ADDSForest -DomainName $DomainName -SafeModeAdministratorPassword (ConvertTo-SecureString $DomainAdminPassword -AsPlainText -Force) -InstallDNS -DomainNetbiosName $DomainNetbiosName -Force
 
   Get-WindowsFeature RSAT-AD-Tools
   Install-WindowsFeature RSAT-AD-Tools
@@ -237,7 +239,7 @@ function Add-ADVulnerabilities {
   Add-RandomComputersToDomain
   Write-Host "[*] Creating 3 local users with weak passwords..."
 
-  # Add rnadom users with weak password
+  # Add random users with weak password
 
   $group = [ADSI]"WinNT://./Users,group"
   for ($i = 1; $i -le 10; $i++) {
@@ -249,10 +251,10 @@ function Add-ADVulnerabilities {
       #Add-LocalGroupMember -Group "Users" -Member $username
 
       $group.Add("WinNT://./$username,user")
-      Write-Host "[+] User '$username' created with password '$($user.password)'"
+      Write-Host "[+] User '$username' created with password '$p'"
     }
     catch {
-      Write-Host "[-] Failed to create user '$($user.name)': $_"
+      Write-Host "[-] Failed to create user '$username': $_"
     }
   }
 
@@ -260,27 +262,56 @@ function Add-ADVulnerabilities {
 
 
 
-  foreach ($vu in $vulnUsers) {
-    for ($i = 1; $i -le 5; $i++) {
+  for ($i = 1; $i -le 5; $i++) {
 
-      try {
-        $u = Get-RandomAndRemove -ArrayName Usernames
-        $p1 = Get-RandomAndRemove -ArrayName Passwords
-        $p = ConvertTo-SecureString $p1 -AsPlainText -Force
-        $user = New-LocalUser -Name $u -Password $p -FullName $u -Description "Password is $($vu.password)" -UserMayNotChangePassword -PasswordNeverExpires
+    try {
+      $u = Get-RandomAndRemove -ArrayName Usernames
+      $p1 = Get-RandomAndRemove -ArrayName Passwords
+      $p = ConvertTo-SecureString $p1 -AsPlainText -Force
+      $user = New-LocalUser -Name $u -Password $p -FullName $u -Description "Password is $p1" -UserMayNotChangePassword -PasswordNeverExpires
 
-        if ($user) {
-          #Add-LocalGroupMember -Group "Users" -Member $u
-          $group.Add("WinNT://./$u,user")
-          Write-Host "[+] Vuln user '$u' created with password '$($vu.password)'."
-        }
+      if ($user) {
+        #Add-LocalGroupMember -Group "Users" -Member $u
+        $group.Add("WinNT://./$u,user")
+        Write-Host "[+] Vuln user '$u' created with password '$p'."
       }
-      catch {
-        Write-Host "[-] Error creating vuln user '$($vu.name)': $_"
-      }
+    }
+    catch {
+      Write-Host "[-] Error creating vuln user '$u': $_"
     }
   }
 
+
+  ## Enable guest user :)
+
+  # Enable-LocalUser -Name "Guest"
+  # Set-LocalUser -Name "Guest" -Password (ConvertTo-SecureString "Password123" -AsPlainText -Force)
+  # Add-LocalGroupMember -Group "Users" -Member "Guest"
+  # ntrights +r SeInteractiveLogonRight -u Guest
+  # secedit /export /cfg C:\secpol.cfg
+  # (gc C:\secpol.cfg) -replace 'SeDenyInteractiveLogonRight =.*', 'SeDenyInteractiveLogonRight =' | Set-Content C:\secpol.cfg
+  # secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas USER_RIGHTS
+
+  ## Domain guest user
+
+  # Set variables
+  $Username = "guest"
+  $Password = "Welcome123"  # Use something weak if you're testing bruteforce/escalation
+  $SecurePassword = ConvertTo-SecureString $Password -AsPlainText -Force
+
+  # Create the user
+  New-ADUser -Name $Username `
+  -SamAccountName $Username `
+  -AccountPassword $SecurePassword `
+  -Enabled $true `
+  -PasswordNeverExpires $true `
+  -CannotChangePassword $true `
+  -UserPrincipalName "$Username@$(Get-ADDomain).DNSRoot"
+
+  # Add to 'Domain Guests' group (super limited rights)
+  Add-ADGroupMember -Identity "Domain Guests" -Members $Username
+
+  Set-ADUser -Identity $Username -PasswordNotRequired $true
 
   Write-Host "[*] Creating auto-login user..."
 
@@ -519,43 +550,65 @@ function Add-ADVulnerabilities {
   }
   function Set-SMBVersion {
     # Disable SMB Signing on client side
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" -Name RequireSecuritySignature -Value 0
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" -Name RequireSecuritySignature -Value 0
 
-# Disable SMB Signing on server side
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name RequireSecuritySignature -Value 0
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name EnableSecuritySignature -Value 0
+    # Disable SMB Signing on server side
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name RequireSecuritySignature -Value 0
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name EnableSecuritySignature -Value 0
+
+    # Allow null sessions to see shares
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'NullSessionShares' -Value 'IPC$','SHARENAME' -PropertyType MultiString
+
+    # Lower anonymous access restrictions
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymous' -Value 0
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymousSAM' -Value 0
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'EveryoneIncludesAnonymous' -Value 1
+
+
   }
   function Set-SMBSigning {
     Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
-Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -NoRestart
-Enable-WindowsOptionalFeature -Online -FeatureName FS-SMB1 -NoRestart
-    Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+    Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol-Server -NoRestart
+    Enable-WindowsOptionalFeature -Online -FeatureName FS-SMB1 -NoRestart
+    Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force
+    #Set-SmbServerConfiguration -RestrictNullSessionAccess $false
+    Set-SmbServerConfiguration -NullSessionShares $true -Force
+    Set-SmbServerConfiguration -NullSessionPipes $true -Force
+    Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
+    Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -All
+    Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force
     # Set-SmbServerConfiguration -EnableSMB2Protocol $false
     #Set-SmbServerConfiguration -EnableSMB2Protocol $true
   }
   function Set-NullAuth {
     Set-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymous' -Value 0
-Set-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymousSAM' -Value 0
-New-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'NullSessionPipes' -PropertyType MultiString -Value @("lsarpc","samr","netlogon") -Force
+    Set-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymousSAM' -Value 0
+    New-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'NullSessionPipes' -PropertyType MultiString -Value @("lsarpc","samr","netlogon") -Force
 
     # Allow null sessions on IPC$
-New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "NullSessionShares" -Value @("IPC$") -PropertyType MultiString -Force
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "NullSessionShares" -Value @("IPC$") -PropertyType MultiString -Force
 
-# Loosen anonymous restrictions
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymous" -Value 0
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymousSAM" -Value 0
+    # Loosen anonymous restrictions
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymous" -Value 0
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymousSAM" -Value 0
 
     Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" | Select-Object RestrictAnonymous, RestrictAnonymousSAM
 
     New-SmbShare -Name "test" -Path "C:\Users\Public" -FullAccess Everyone
     Set-SmbShare -Name "test" -FolderEnumerationMode AccessBased -Force
-Set-SmbShare -Name "test" -CachingMode None - Force
+    Set-SmbShare -Name "test" -CachingMode None - Force
 
   Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -Force
     Set-SmbServerConfiguration -EnableInsecureGuestLogons $true -Force
 
     New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "NullSessionPipes" -PropertyType MultiString -Value @("lsarpc", "samr", "netlogon") -Force
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "NullSessionShares" -PropertyType MultiString -Value @("IPC$") -Force
+
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymous' -Value 0
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymousSAM' -Value 0
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'EveryoneIncludesAnonymous' -Value 1
+
+    New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'NullSessionShares' -Value 'IPC$' -PropertyType MultiString
   }
   # Add Vulnerabilities
   Add-GoldenTicketVuln
