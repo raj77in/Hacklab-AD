@@ -28,9 +28,6 @@
 .PARAMETER DefaultGateway
     Specifies the default gateway (default: 172.16.70.1)
 
-.PARAMETER DNSServers
-    Specifies the DNS servers (default: 172.16.70.10, 8.8.8.8)
-
 .EXAMPLE
     # Default configuration
     .\Hacklab-AD3.ps1
@@ -56,10 +53,13 @@ param (
   [string]$IPAddress = "172.16.70.10",
   [int]$PrefixLength = 24,
   [string]$DefaultGateway = "172.16.70.1",
-  [string[]]$DNSServers = @("172.16.70.10", "8.8.8.8"),
   [switch]$HelpPT,
-  [int]$UserCount = 10
+  [int]$UserCount = 50
 )
+
+# Set DNS servers based on IP address (DC IP + Google DNS fallback)
+$DNSServers = @($IPAddress, "8.8.8.8")
+Write-Host "DNS servers set to: $($DNSServers -join ', ')" -ForegroundColor Green
 
 ## Enable for tracing.
 Set-PSDebug -Trace 0
@@ -73,16 +73,16 @@ $DebugPreference = 'SilentlyContinue'
 
 # Suppress verbose output from specific cmdlets
 $PSDefaultParameterValues = @{
-  'Enable-PSRemoting:Verbose' = $false
-  'Install-WindowsFeature:Verbose' = $false
-  'Get-WindowsFeature:Verbose' = $false
-  'Import-Module:Verbose' = $false
+  'Enable-PSRemoting:Verbose'          = $false
+  'Install-WindowsFeature:Verbose'     = $false
+  'Get-WindowsFeature:Verbose'         = $false
+  'Import-Module:Verbose'              = $false
   'Set-PSSessionConfiguration:Verbose' = $false
   'Get-PSSessionConfiguration:Verbose' = $false
-  'New-ADUser:Verbose' = $false
-  'Set-ADUser:Verbose' = $false
-  'Add-ADGroupMember:Verbose' = $false
-  'Get-ADOrganizationalUnit:Verbose' = $false
+  'New-ADUser:Verbose'                 = $false
+  'Set-ADUser:Verbose'                 = $false
+  'Add-ADGroupMember:Verbose'          = $false
+  'Get-ADOrganizationalUnit:Verbose'   = $false
 }
 
 # Display penetration testing help if requested
@@ -770,7 +770,8 @@ function Invoke-LoggedCommand {
       $result | ForEach-Object {
         if ($_ -is [System.Management.Automation.ErrorRecord]) {
           Write-Log "Command Error: $_" -Level ERROR
-        } else {
+        }
+        else {
           Write-Log "Command Output: $_" -Level DEBUG
         }
       }
@@ -882,7 +883,7 @@ $Script:UserConfig = @{
 
   # Predefined vulnerable users
   WeakPasswordUsers = @(
-    @{Name = "john.doe"; GivenName = "John"; Surname = "Doe"; Password = "123"; Description = "Regular user with weak password"; Groups = @() },
+    @{Name = "john.doe"; GivenName = "John"; Surname = "Doe"; Password = "123"; Description = "Regular user with weak password"; Groups = @("Remote Management Users") },
     @{Name = "jane.smith"; GivenName = "Jane"; Surname = "Smith"; Password = "password"; Description = "HR user with weak password"; Groups = @() },
     @{Name = "admin.backup"; GivenName = "Admin"; Surname = "Backup"; Password = "admin"; Description = "Backup admin account"; Groups = @("Domain Admins") },
     @{Name = "guest.user"; GivenName = "Guest"; Surname = "User"; Password = "guest"; Description = "Guest user account"; Groups = @() },
@@ -1104,7 +1105,8 @@ function Install-ADCS {
         Force               = $true
         ErrorAction         = 'Stop'
       }
-    } else {
+    }
+    else {
       Write-Log "Using legacy server AD CS configuration" -Level INFO
 
       # Original parameters for older servers
@@ -1138,10 +1140,10 @@ function Install-ADCS {
         Write-Log "Attempting alternative AD CS configuration for Server 2025..." -Level INFO
 
         $alternativeParams = @{
-          CAType              = 'StandaloneRootCA'
-          CACommonName        = "$($Script:DomainConfig.DomainNetbiosName)-ROOT-CA"
-          Force               = $true
-          ErrorAction         = 'Stop'
+          CAType       = 'StandaloneRootCA'
+          CACommonName = "$($Script:DomainConfig.DomainNetbiosName)-ROOT-CA"
+          Force        = $true
+          ErrorAction  = 'Stop'
         }
 
         try {
@@ -1152,7 +1154,8 @@ function Install-ADCS {
           Write-Log "Alternative AD CS configuration also failed: $_" -Level ERROR
           throw
         }
-      } else {
+      }
+      else {
         throw
       }
     }
@@ -1168,7 +1171,7 @@ function Install-ADCS {
 
     # Configure vulnerable web enrollment settings
     Set-WebConfigurationProperty -Filter '/system.webServer/security/authentication/anonymousAuthentication' `
-    -Name 'enabled' -Value 'True' -PSPath 'IIS:\Sites\Default Web Site\CertSrv' -Location 'Default Web Site/CertSrv'
+      -Name 'enabled' -Value 'True' -PSPath 'IIS:\Sites\Default Web Site\CertSrv' -Location 'Default Web Site/CertSrv'
 
     # Restart AD CS service with proper error handling
     try {
@@ -1381,7 +1384,7 @@ function Enable-LLMNRPoisoning {
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Name "EnableMulticast" -Value 1 -Force
 
     # Enable NetBIOS over TCP/IP
-    $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where-Object {$_.IPEnabled -eq $true}
+    $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
     foreach ($adapter in $adapters) {
       $adapter.SetTcpipNetbios(1) | Out-Null # Enable NetBIOS
     }
@@ -1446,7 +1449,7 @@ function Set-ConstrainedDelegation {
       New-ADUser -Name $serviceAccount -AccountPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Enabled $true -PasswordNeverExpires $true -ErrorAction Stop
 
       # Set constrained delegation to CIFS and HTTP services
-      Set-ADUser -Identity $serviceAccount -Add @{'msDS-AllowedToDelegateTo'=@('CIFS/dc.lab.local','HTTP/web.lab.local','CIFS/fileserver.lab.local')}
+      Set-ADUser -Identity $serviceAccount -Add @{'msDS-AllowedToDelegateTo' = @('CIFS/dc.lab.local', 'HTTP/web.lab.local', 'CIFS/fileserver.lab.local') }
 
       Write-Log "Created constrained delegation account: $serviceAccount with password: $password" -Level INFO
     }
@@ -1615,10 +1618,10 @@ function Set-WeakSPNs {
 
     # Create service accounts with very weak passwords and SPNs
     $services = @(
-      @{Name="mssql_svc"; SPN="MSSQLSvc/sql.lab.local:1433"; Password="sql"},
-      @{Name="http_svc"; SPN="HTTP/web.lab.local"; Password="web"},
-      @{Name="ftp_svc"; SPN="FTP/ftp.lab.local"; Password="ftp"},
-      @{Name="oracle_svc"; SPN="ORACLE/db.lab.local:1521"; Password="oracle"}
+      @{Name = "mssql_svc"; SPN = "MSSQLSvc/sql.lab.local:1433"; Password = "sql" },
+      @{Name = "http_svc"; SPN = "HTTP/web.lab.local"; Password = "web" },
+      @{Name = "ftp_svc"; SPN = "FTP/ftp.lab.local"; Password = "ftp" },
+      @{Name = "oracle_svc"; SPN = "ORACLE/db.lab.local:1521"; Password = "oracle" }
     )
 
     foreach ($service in $services) {
@@ -1740,9 +1743,9 @@ function Set-PrivilegedGroupMisconfigs {
 
     # Add users to sensitive groups
     $privilegedGroups = @(
-      @{Group="DNS Admins"; User="john.doe"},
-      @{Group="Backup Operators"; User="jane.smith"},
-      @{Group="Print Operators"; User="guest.user"}
+      @{Group = "DNS Admins"; User = "john.doe" },
+      @{Group = "Backup Operators"; User = "jane.smith" },
+      @{Group = "Print Operators"; User = "guest.user" }
     )
 
     foreach ($config in $privilegedGroups) {
@@ -1835,14 +1838,14 @@ function Set-UserDisclosureMethods {
 
       # Add DNS records that might reveal usernames using dynamic IP range
       $dnsRecords = @(
-        @{Name="admin-pc"; IP="$baseIP.100"},
-        @{Name="john-laptop"; IP="$baseIP.101"},
-        @{Name="jane-workstation"; IP="$baseIP.102"},
-        @{Name="backup-server"; IP="$baseIP.103"},
-        @{Name="sql-server"; IP="$baseIP.104"},
-        @{Name="web-server"; IP="$baseIP.105"},
-        @{Name="file-server"; IP="$baseIP.106"},
-        @{Name="print-server"; IP="$baseIP.107"}
+        @{Name = "admin-pc"; IP = "$baseIP.100" },
+        @{Name = "john-laptop"; IP = "$baseIP.101" },
+        @{Name = "jane-workstation"; IP = "$baseIP.102" },
+        @{Name = "backup-server"; IP = "$baseIP.103" },
+        @{Name = "sql-server"; IP = "$baseIP.104" },
+        @{Name = "web-server"; IP = "$baseIP.105" },
+        @{Name = "file-server"; IP = "$baseIP.106" },
+        @{Name = "print-server"; IP = "$baseIP.107" }
       )
 
       foreach ($record in $dnsRecords) {
@@ -1868,7 +1871,7 @@ function Set-UserDisclosureMethods {
       $kerberosPolicy = @{
         "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters" = @{
           "MaxTokenSize" = 65535
-          "LogLevel" = 1
+          "LogLevel"     = 1
         }
       }
 
@@ -1949,11 +1952,13 @@ function Write-VulnerabilitySummary {
       foreach ($user in $labUsers) {
         if ($user.Name -match "svc_|_svc$|service") {
           $serviceAccounts += $user
-        } elseif ($user.Name -match "admin|operator|dns\.|backup\.") {
+        }
+        elseif ($user.Name -match "admin|operator|dns\.|backup\.") {
           $privilegedAccounts += $user
         }
       }
-    } catch {
+    }
+    catch {
       Write-Log "Warning: Could not enumerate some accounts: $_" -Level WARNING
     }
 
@@ -2133,7 +2138,8 @@ function Set-DNSAdminVulnerability {
       Set-ADAccountPassword -Identity $dnsAdminUser -NewPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Reset -ErrorAction Stop
       Set-ADUser -Identity $dnsAdminUser -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
       Write-Log "Updated DNS Admin user: $dnsAdminUser with password: $password" -Level INFO
-    } else {
+    }
+    else {
       # Create new DNS Admin user
       $labUsersOU = Get-LabUsersOU
       New-ADUser -Name $dnsAdminUser `
@@ -2178,7 +2184,7 @@ function Set-MachineAccountQuota {
 
     # Ensure machine account quota is set to default (10)
     $domain = Get-ADDomain
-    Set-ADDomain -Identity $domain -Replace @{"ms-DS-MachineAccountQuota"="10"} -ErrorAction Stop
+    Set-ADDomain -Identity $domain -Replace @{"ms-DS-MachineAccountQuota" = "10" } -ErrorAction Stop
 
     Write-Log "Machine Account Quota set to 10 (allows domain users to create computer accounts)" -Level INFO
     return $true
@@ -2214,7 +2220,8 @@ function Set-BackupOperatorsVulnerability {
       Set-ADAccountPassword -Identity $backupUser -NewPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Reset -ErrorAction Stop
       Set-ADUser -Identity $backupUser -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
       Write-Log "Updated Backup Operator user: $backupUser with password: $password" -Level INFO
-    } else {
+    }
+    else {
       # Create new Backup Operator user
       $labUsersOU = Get-LabUsersOU
       New-ADUser -Name $backupUser `
@@ -2266,7 +2273,8 @@ function Set-AccountOperatorsVulnerability {
       Set-ADAccountPassword -Identity $accountUser -NewPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Reset -ErrorAction Stop
       Set-ADUser -Identity $accountUser -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
       Write-Log "Updated Account Operator user: $accountUser with password: $password" -Level INFO
-    } else {
+    }
+    else {
       # Create new Account Operator user
       $labUsersOU = Get-LabUsersOU
       New-ADUser -Name $accountUser `
@@ -2333,11 +2341,11 @@ function Set-ADIDNSPoisoning {
 
     # Create wildcard DNS records for common services
     $wildcardRecords = @(
-      @{Name="*"; Target="169.254.0.100"; Description="Wildcard record for traffic interception"},
-      @{Name="wpad"; Target="169.254.0.101"; Description="WPAD poisoning record"},
-      @{Name="proxy"; Target="169.254.0.102"; Description="Proxy poisoning record"},
-      @{Name="mail"; Target="169.254.0.103"; Description="Mail server poisoning"},
-      @{Name="ftp"; Target="169.254.0.104"; Description="FTP server poisoning"}
+      @{Name = "*"; Target = "169.254.0.100"; Description = "Wildcard record for traffic interception" },
+      @{Name = "wpad"; Target = "169.254.0.101"; Description = "WPAD poisoning record" },
+      @{Name = "proxy"; Target = "169.254.0.102"; Description = "Proxy poisoning record" },
+      @{Name = "mail"; Target = "169.254.0.103"; Description = "Mail server poisoning" },
+      @{Name = "ftp"; Target = "169.254.0.104"; Description = "FTP server poisoning" }
     )
 
     foreach ($record in $wildcardRecords) {
@@ -2374,10 +2382,10 @@ function Set-SYSVOLVulnerabilities {
 
     # Create sensitive files in SYSVOL
     $sensitiveFiles = @(
-      @{Name="backup_script.bat"; Content="@echo off`nnet use Z: \\fileserver\backup /user:backup.admin P@ssw0rd123!`nrobocopy C:\ImportantData Z:\ /MIR"},
-      @{Name="config.xml"; Content="<?xml version='1.0'?><config><database><server>sql01</server><username>sa</username><password>SqlAdmin123!</password></database></config>"},
-      @{Name="credentials.txt"; Content="Service Account Credentials:`nservice.account:ServicePass123!`nbackup.service:BackupPass456!`nadmin.service:AdminPass789!"},
-      @{Name="install.ps1"; Content="# Installation script`n$cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'AdminPassword123!' -AsPlainText -Force))`nInvoke-Command -ComputerName server01 -Credential $cred -ScriptBlock { Install-Software }"}
+      @{Name = "backup_script.bat"; Content = "@echo off`nnet use Z: \\fileserver\backup /user:backup.admin P@ssw0rd123!`nrobocopy C:\ImportantData Z:\ /MIR" },
+      @{Name = "config.xml"; Content = "<?xml version='1.0'?><config><database><server>sql01</server><username>sa</username><password>SqlAdmin123!</password></database></config>" },
+      @{Name = "credentials.txt"; Content = "Service Account Credentials:`nservice.account:ServicePass123!`nbackup.service:BackupPass456!`nadmin.service:AdminPass789!" },
+      @{Name = "install.ps1"; Content = "# Installation script`n$cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'AdminPassword123!' -AsPlainText -Force))`nInvoke-Command -ComputerName server01 -Credential $cred -ScriptBlock { Install-Software }" }
     )
 
     foreach ($file in $sensitiveFiles) {
@@ -2430,7 +2438,7 @@ function Set-AdvancedCertificateVulnerabilities {
         -Name 'clear' -Value $true -PSPath 'IIS:\Sites\Default Web Site\CertSrv' -ErrorAction SilentlyContinue
 
       Add-WebConfigurationProperty -Filter '/system.webServer/security/authentication/windowsAuthentication/providers' `
-        -Name '.' -Value @{value='NTLM'} -PSPath 'IIS:\Sites\Default Web Site\CertSrv' -ErrorAction SilentlyContinue
+        -Name '.' -Value @{value = 'NTLM' } -PSPath 'IIS:\Sites\Default Web Site\CertSrv' -ErrorAction SilentlyContinue
 
       Write-Log "Configured ESC8: NTLM authentication on AD CS HTTP endpoints" -Level INFO
     }
@@ -2696,7 +2704,8 @@ function Install-ActiveDirectory {
     $adDomain = $null
     try {
       $adDomain = Get-ADDomain -ErrorAction SilentlyContinue
-    } catch { }
+    }
+    catch { }
 
     if ($adDomain) {
       Write-Log "Active Directory is already installed and configured" -Level INFO
@@ -2791,7 +2800,7 @@ function Add-RandomAndRemove {
 function Set-VulnerableUsers {
   [CmdletBinding()]
   param(
-    [int]$UserCount = 10
+    [int]$UserCount = $Script:UserCount
   )
 
   Write-Log "Creating users with weak passwords and misconfigurations..." -Level INFO
@@ -2836,7 +2845,8 @@ function Set-VulnerableUsers {
             Set-ADAccountPassword -Identity $user.Name -NewPassword $password -Reset -ErrorAction Stop
             Set-ADUser -Identity $user.Name -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
             Write-Log "Updated existing user password: $($user.Name) with password: $userPassword" -Level INFO
-          } else {
+          }
+          else {
             # Create new user
             New-ADUser @userParams
             Write-Log "Created vulnerable user: $($user.Name) with password: $userPassword" -Level INFO
@@ -2909,15 +2919,47 @@ function Set-VulnerableUsers {
           Set-ADAccountPassword -Identity $username -NewPassword $securePass -Reset -ErrorAction Stop
           Set-ADUser -Identity $username -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
           Write-Log "Updated existing random user password: $username with password: $password" -Level INFO
-        } else {
+        }
+        else {
           # Create new user
           New-ADUser @userParams
           Write-Log "Created random user: $username with password: $password" -Level INFO
         }
 
-        Add-UserToTracking -Username $username -Password $password -Description "Random generated user"
+        # Randomly decide if this user should have password in description (security misconfiguration)
+        $addPasswordToDescription = (Get-Random -Minimum 1 -Maximum 10) -gt 7  # 30% chance
+        $userDescription = if ($addPasswordToDescription) {
+          "Random generated user - Password: $password"
+        }
+        else {
+          "Random generated user"
+        }
 
-        # Randomly add to some groups
+        # Update user description if password should be included
+        if ($addPasswordToDescription) {
+          try {
+            Set-ADUser -Identity $username -Description $userDescription -ErrorAction SilentlyContinue
+            Write-Log "Added password to description for user: $username" -Level INFO
+          }
+          catch {
+            Write-Log "Error setting description for user $username`: $_" -Level WARNING
+          }
+        }
+
+        Add-UserToTracking -Username $username -Password $password -Description $userDescription
+
+        # Randomly add to WinRM Remote Management Users group (20% chance)
+        if ((Get-Random -Minimum 1 -Maximum 10) -gt 8) {
+          try {
+            Add-ADGroupMember -Identity "Remote Management Users" -Members $username -ErrorAction SilentlyContinue
+            Write-Log "Added random user $username to Remote Management Users group for WinRM access" -Level INFO
+          }
+          catch {
+            Write-Log "Error adding user $username to Remote Management Users group: $_" -Level WARNING
+          }
+        }
+
+        # Randomly add to some other groups
         if ((Get-Random -Minimum 1 -Maximum 10) -gt 8) {
           $groups = Get-ADGroup -Filter * | Get-Random -Count 2
           if ($groups) {
@@ -2926,7 +2968,8 @@ function Set-VulnerableUsers {
               foreach ($group in $groups) {
                 Add-ADGroupMember -Identity $group -Members $username -ErrorAction SilentlyContinue
               }
-            } else {
+            }
+            else {
               Add-ADGroupMember -Identity $groups -Members $username -ErrorAction SilentlyContinue
             }
           }
@@ -2956,12 +2999,14 @@ function Set-VulnerableUsers {
 
           # Try to set SPN, but handle conflicts gracefully
           try {
-            Set-ADUser -Identity $username -ServicePrincipalNames @{Add=$spn} -ErrorAction Stop
+            Set-ADUser -Identity $username -ServicePrincipalNames @{Add = $spn } -ErrorAction Stop
             Write-Log -Message ("Updated service account: {0} with password: {1} and SPN: {2}" -f $username, $password, $spn) -Level "INFO"
-          } catch {
+          }
+          catch {
             Write-Log -Message ("Updated service account: {0} with password: {1} (SPN conflict: {2})" -f $username, $password, $spn) -Level "INFO"
           }
-        } else {
+        }
+        else {
           # Create new service account with SPN as array
           $labUsersOU = Get-LabUsersOU
           New-ADUser -Name $username `
@@ -3005,7 +3050,8 @@ function Set-VulnerableUsers {
         Set-ADAccountPassword -Identity $username -NewPassword $securePass -Reset -ErrorAction Stop
         Set-ADUser -Identity $username -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
         Write-Log "Updated AS-REP roastable account: $username with password: $password" -Level INFO
-      } else {
+      }
+      else {
         # Create new account
         $labUsersOU = Get-LabUsersOU
         New-ADUser -Name $username `
@@ -3044,7 +3090,8 @@ function Set-VulnerableUsers {
         Set-ADAccountPassword -Identity $username -NewPassword $securePass -Reset -ErrorAction Stop
         Set-ADUser -Identity $username -Enabled $true -PasswordNeverExpires $true -CannotChangePassword $true -ErrorAction SilentlyContinue
         Write-Log "Updated unconstrained delegation account: $username with password: $password" -Level INFO
-      } else {
+      }
+      else {
         # Create new account
         $labUsersOU = Get-LabUsersOU
         New-ADUser -Name $username `
@@ -3122,8 +3169,63 @@ function Set-VulnerableSettings {
     Set-SmbServerConfiguration -RequireSecuritySignature 0 -Force -ErrorAction SilentlyContinue
     Set-SmbServerConfiguration -EnableSecuritySignature 0 -Force -ErrorAction SilentlyContinue
 
-    # Enable SMBv1
-    Enable-WindowsOptionalFeature -Online -FeatureName smb1protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null
+    # Enable SMBv1 and check if restart is needed
+    Write-Log "Installing SMB1 protocol..." -Level INFO
+    $smb1Result = Enable-WindowsOptionalFeature -Online -FeatureName smb1protocol -NoRestart -ErrorAction SilentlyContinue
+    
+    if ($smb1Result -and $smb1Result.RestartNeeded) {
+      Write-Log "SMB1 installation requires a restart. Creating state file and restarting..." -Level INFO
+      
+      # Create state file for post-SMB1 restart
+      $stateFile = "$env:TEMP\.adlab_state"
+      $stateData = @{
+        Step = 'PostSMB1Install'
+        DomainName = $Script:DomainConfig.DomainName
+        DomainNetbiosName = $Script:DomainConfig.DomainNetbiosName
+        IPAddress = $Script:NetworkConfig.IPAddress
+        PrefixLength = $Script:NetworkConfig.PrefixLength
+        DefaultGateway = $Script:NetworkConfig.DefaultGateway
+        DNSServers = $Script:NetworkConfig.DNSServers
+        UserCount = $UserCount
+      }
+      
+      try {
+        $stateData | ConvertTo-Json | Set-Content -Path $stateFile -Force
+        Write-Log "State file created. System will restart to complete SMB1 installation." -Level SUCCESS
+        Write-Log "Please run this script again after restart to continue configuration." -Level INFO
+        
+        # Restart the computer
+        Restart-Computer -Force
+        exit 0
+      }
+      catch {
+        Write-Log "Failed to create state file: $_" -Level ERROR
+        Write-Log "Continuing without restart, but SMB configurations may not work properly." -Level WARNING
+      }
+    }
+    else {
+      Write-Log "SMB1 installed successfully without restart requirement" -Level INFO
+    }
+
+    # Additional SMB server configurations for vulnerability testing
+    # These will be applied after SMB1 is properly installed
+    try {
+      Set-SmbServerConfiguration -AnnounceServer $true -EnableSecuritySignature $false -EnableSMB1Protocol $true -ServerHidden $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB server announcement and SMB1 protocol configured" -Level INFO } else { Write-Log "Failed to configure SMB server announcement" -Level WARNING }
+      
+      Set-SmbServerConfiguration -EnableStrictNameChecking $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB strict name checking disabled" -Level INFO } else { Write-Log "Failed to disable SMB strict name checking" -Level WARNING }
+      
+      Set-SmbServerConfiguration -ValidateTargetName $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB target name validation disabled" -Level INFO } else { Write-Log "Failed to disable SMB target name validation" -Level WARNING }
+      
+      Set-SmbServerConfiguration -EnableAuthRateLimiter $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB authentication rate limiter disabled" -Level INFO } else { Write-Log "Failed to disable SMB auth rate limiter" -Level WARNING }
+    }
+    catch {
+      Write-Log "Error configuring additional SMB settings: $_" -Level WARNING
+      Write-Log "This may be due to SMB1 not being fully installed. Try running the script again after a manual restart." -Level WARNING
+    }
 
     # Disable LSA Protection
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\LSA" -Name "RunAsPPL" -Value 0 -Force
@@ -3137,6 +3239,63 @@ function Set-VulnerableSettings {
     # Enable RDP
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
+
+    # Enable and configure WinRM for vulnerability testing
+    try {
+      # Enable WinRM service
+      Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue
+      Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
+      Start-Service -Name WinRM -ErrorAction SilentlyContinue
+
+      # Configure WinRM with weak security settings for testing
+      winrm set winrm/config/service/auth '@{Basic="true"}' 2>$null
+      winrm set winrm/config/service '@{AllowUnencrypted="true"}' 2>$null
+      winrm set winrm/config/winrs '@{AllowRemoteShellAccess="true"}' 2>$null
+
+      # Add firewall rules for WinRM
+      New-NetFirewallRule -DisplayName "WinRM-HTTP" -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow -ErrorAction SilentlyContinue
+      New-NetFirewallRule -DisplayName "WinRM-HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -ErrorAction SilentlyContinue
+
+      Write-Log "WinRM enabled and configured" -Level INFO
+    }
+    catch {
+      Write-Log "Error configuring WinRM: $_" -Level WARNING
+    }
+
+    # Add specific users to Remote Management Users group for WinRM access
+    try {
+      # Define users that should have WinRM access
+      $winrmUsers = @(
+        "admin.backup",
+        "dns.admin",
+        "account.operator",
+        "svc_web",
+        "svc_sql",
+        "svc_backup"
+      )
+
+      foreach ($user in $winrmUsers) {
+        try {
+          # Check if user exists before adding to group
+          $adUser = Get-ADUser -Identity $user -ErrorAction SilentlyContinue
+          if ($adUser) {
+            Add-ADGroupMember -Identity "Remote Management Users" -Members $user -ErrorAction SilentlyContinue
+            Write-Log "Added user $user to Remote Management Users group for WinRM access" -Level INFO
+          }
+          else {
+            Write-Log "User $user not found, skipping WinRM group addition" -Level WARNING
+          }
+        }
+        catch {
+          Write-Log "Error adding user $user to Remote Management Users group: $_" -Level WARNING
+        }
+      }
+
+      Write-Log "WinRM user access configuration completed" -Level INFO
+    }
+    catch {
+      Write-Log "Error configuring WinRM user access: $_" -Level WARNING
+    }
 
     # Enable remote UAC
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LocalAccountTokenFilterPolicy" -Value 1 -Force
@@ -3208,13 +3367,13 @@ function Invoke-VulnerabilityConfiguration {
       # For newer servers, we need to be more careful with password policies
       # Set minimum requirements that work with Server 2025
       $policyParams = @{
-        Identity = $Script:DomainConfig.DomainName
-        ComplexityEnabled = $false  # Disable complexity for lab environment
-        MinPasswordLength = 3       # Minimum that newer servers will accept
-        MinPasswordAge = [TimeSpan]::FromDays(0)
-        MaxPasswordAge = [TimeSpan]::FromDays(0)  # Never expire
+        Identity             = $Script:DomainConfig.DomainName
+        ComplexityEnabled    = $false  # Disable complexity for lab environment
+        MinPasswordLength    = 3       # Minimum that newer servers will accept
+        MinPasswordAge       = [TimeSpan]::FromDays(0)
+        MaxPasswordAge       = [TimeSpan]::FromDays(0)  # Never expire
         PasswordHistoryCount = 0
-        ErrorAction = 'Stop'
+        ErrorAction          = 'Stop'
       }
     }
     else {
@@ -3222,13 +3381,13 @@ function Invoke-VulnerabilityConfiguration {
 
       # For older servers, use the original weak settings
       $policyParams = @{
-        Identity = $Script:DomainConfig.DomainName
-        ComplexityEnabled = $Script:VulnConfig.PasswordPolicy.ComplexityEnabled
-        MinPasswordLength = $Script:VulnConfig.PasswordPolicy.MinPasswordLength
-        MinPasswordAge = [TimeSpan]::FromDays($Script:VulnConfig.PasswordPolicy.MinPasswordAge)
-        MaxPasswordAge = [TimeSpan]::FromDays($Script:VulnConfig.PasswordPolicy.MaxPasswordAge)
+        Identity             = $Script:DomainConfig.DomainName
+        ComplexityEnabled    = $Script:VulnConfig.PasswordPolicy.ComplexityEnabled
+        MinPasswordLength    = $Script:VulnConfig.PasswordPolicy.MinPasswordLength
+        MinPasswordAge       = [TimeSpan]::FromDays($Script:VulnConfig.PasswordPolicy.MinPasswordAge)
+        MaxPasswordAge       = [TimeSpan]::FromDays($Script:VulnConfig.PasswordPolicy.MaxPasswordAge)
         PasswordHistoryCount = $Script:VulnConfig.PasswordPolicy.PasswordHistoryCount
-        ErrorAction = 'Stop'
+        ErrorAction          = 'Stop'
       }
     }
 
@@ -3538,10 +3697,18 @@ function Invoke-VulnerabilityConfiguration {
 
     # Configure SMB settings with error handling
     try {
-      Set-SmbServerConfiguration -EncryptData $false -Force -ErrorAction Stop
-      Set-SmbServerConfiguration -EnableSMB1Protocol $Script:VulnConfig.SMB.SMB1Enabled -Force -ErrorAction Stop
-      Set-SmbServerConfiguration -EnableSMB2Protocol $Script:VulnConfig.SMB.SMB2Enabled -Force -ErrorAction Stop
-      Set-SmbServerConfiguration -RequireSecuritySignature $Script:VulnConfig.SMB.SigningRequired -Force -ErrorAction Stop
+      Set-SmbServerConfiguration -EncryptData $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB encryption disabled" -Level INFO } else { Write-Log "Failed to disable SMB encryption" -Level WARNING }
+
+      Set-SmbServerConfiguration -EnableSMB1Protocol $Script:VulnConfig.SMB.SMB1Enabled -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB1 protocol configured" -Level INFO } else { Write-Log "Failed to configure SMB1 protocol" -Level WARNING }
+
+      Set-SmbServerConfiguration -EnableSMB2Protocol $Script:VulnConfig.SMB.SMB2Enabled -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB2 protocol configured" -Level INFO } else { Write-Log "Failed to configure SMB2 protocol" -Level WARNING }
+
+      Set-SmbServerConfiguration -RequireSecuritySignature $Script:VulnConfig.SMB.SigningRequired -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB security signature configured" -Level INFO } else { Write-Log "Failed to configure SMB security signature" -Level WARNING }
+
       Write-Log "SMB configuration completed" -Level INFO
     }
     catch {
@@ -3563,7 +3730,7 @@ function Invoke-VulnerabilityConfiguration {
     # Enable NTLM Authentication (vulnerable to NTLM relay attacks)
     try {
       Write-Log "Configuring NTLM authentication for maximum vulnerability..." -Level INFO
-      
+
       # Ensure MSV1_0 registry key exists
       $msv1Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
       if (-not (Test-Path $msv1Path)) {
@@ -3584,15 +3751,15 @@ function Invoke-VulnerabilityConfiguration {
       # Set LM Compatibility Level to 2 (compatible with older NTLM versions)
       Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LmCompatibilityLevel' -Type DWord -Value 2 -Force
       Write-Log "Set LM Compatibility Level to 2" -Level DEBUG
-      
+
       # Additional NTLM settings for maximum compatibility
       Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'NoLMHash' -Type DWord -Value 0 -Force
       Set-ItemProperty -Path $msv1Path -Name 'AuditReceivingNTLMTraffic' -Type DWord -Value 0 -Force -ErrorAction SilentlyContinue
       Set-ItemProperty -Path $msv1Path -Name 'RestrictSendingNTLMAudit' -Type DWord -Value 0 -Force -ErrorAction SilentlyContinue
-      
+
       # Ensure NTLM is enabled for network authentication
       Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'DisableDomainCreds' -Type DWord -Value 0 -Force -ErrorAction SilentlyContinue
-      
+
       Write-Log "NTLM authentication configured for maximum vulnerability and compatibility" -Level SUCCESS
     }
     catch {
@@ -3646,7 +3813,8 @@ function Invoke-VulnerabilityConfiguration {
           Write-Log "Could not retrieve existing GPO '$gpoName': $_" -Level WARNING
           $gpo = $null
         }
-      } else {
+      }
+      else {
         Write-Log "Error creating GPO '$gpoName': $_" -Level WARNING
         $gpo = $null
       }
@@ -3678,7 +3846,8 @@ function Invoke-VulnerabilityConfiguration {
           $acl.AddAccessRule($accessRule)
           Set-Acl -Path $gpoPath -AclObject $acl
           Write-Log "Set vulnerable GPO permissions for: $gpoName" -Level INFO
-        } else {
+        }
+        else {
           Write-Log "Warning: GPO path not found, skipping ACL modification: $gpoPath" -Level WARNING
         }
       }
@@ -3697,7 +3866,8 @@ function Invoke-VulnerabilityConfiguration {
     catch {
       if ($_.Exception.Message -match "already exists") {
         Write-Log "DNS record 'fileserver' already exists" -Level WARNING
-      } else {
+      }
+      else {
         Write-Log "Warning: Could not create DNS record 'fileserver': $_" -Level WARNING
       }
     }
@@ -3709,7 +3879,8 @@ function Invoke-VulnerabilityConfiguration {
     catch {
       if ($_.Exception.Message -match "already exists") {
         Write-Log "DNS record 'sharepoint' already exists" -Level WARNING
-      } else {
+      }
+      else {
         Write-Log "Warning: Could not create DNS record 'sharepoint': $_" -Level WARNING
       }
     }
@@ -4024,9 +4195,11 @@ function New-PasswordsFile {
     $scriptDir = $PWD.Path  # Use current directory as fallback
     if ($MyInvocation.MyCommand.Path) {
       $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    } elseif ($PSScriptRoot) {
+    }
+    elseif ($PSScriptRoot) {
       $scriptDir = $PSScriptRoot
-    } elseif ($script:MyInvocation.MyCommand.Path) {
+    }
+    elseif ($script:MyInvocation.MyCommand.Path) {
       $scriptDir = Split-Path -Parent $script:MyInvocation.MyCommand.Path
     }
 
@@ -4060,7 +4233,8 @@ function New-PasswordsFile {
         if (Test-Path $location) {
           icacls $location /grant "Everyone:(R)" /T 2>$null
           Write-Log "Password file created: $location" -Level SUCCESS
-        } else {
+        }
+        else {
           Write-Log "Warning: Password file was not created at $location" -Level WARNING
         }
       }
@@ -4142,10 +4316,10 @@ function Add-UserToTracking {
   )
 
   $Global:CreatedUsers += @{
-    Username = $Username
-    Password = $Password
+    Username    = $Username
+    Password    = $Password
     Description = $Description
-    Groups = $Groups
+    Groups      = $Groups
   }
 }
 
@@ -4235,7 +4409,7 @@ $stateFile = Join-Path -Path $PSScriptRoot -ChildPath ".adlab_state"
 function New-StateFile {
   param(
     [string]$FilePath,
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     $StateData  # Accept any object type
   )
 
@@ -4443,7 +4617,8 @@ else {
           if ($domain.DNSRoot -eq $DomainName -or $domain.NetBIOSName -eq $DomainNetbiosName) {
             Write-Log "Active Directory validation successful - Domain: $($domain.DNSRoot)" -Level SUCCESS
             $adReady = $true
-          } else {
+          }
+          else {
             Write-Log "Domain mismatch - Expected: $DomainName, Found: $($domain.DNSRoot)" -Level WARNING
           }
         }
@@ -4501,7 +4676,8 @@ else {
       Write-Log "Failed to configure Certificate Services - continuing without AD CS" -Level WARNING
       Write-Log "Note: AD CS vulnerabilities will not be available in this lab" -Level WARNING
       # Don't exit - continue with the rest of the lab setup
-    } else {
+    }
+    else {
       Write-Log "Certificate Services configured successfully" -Level SUCCESS
     }
 
@@ -4536,9 +4712,9 @@ else {
       Write-Log "Performing final system validation..." -Level INFO
       try {
         $finalCheck = @{
-          'Domain' = (Get-ADDomain).Name
-          'DC' = (Get-ADDomainController).Name
-          'Users' = (Get-ADUser -Filter *).Count
+          'Domain'    = (Get-ADDomain).Name
+          'DC'        = (Get-ADDomainController).Name
+          'Users'     = (Get-ADUser -Filter *).Count
           'Computers' = (Get-ADComputer -Filter *).Count
         }
         Write-Log "Final validation - Domain: $($finalCheck.Domain), DC: $($finalCheck.DC), Users: $($finalCheck.Users), Computers: $($finalCheck.Computers)" -Level SUCCESS
@@ -4579,6 +4755,53 @@ else {
       Remove-Item -Path $stateFile -Force -ErrorAction SilentlyContinue
       exit 1
     }
+  }
+  elseif ($state.Step -eq 'PostSMB1Install') {
+    Write-Log "Resuming after SMB1 installation restart..." -Level INFO
+    
+    # Verify SMB1 is now properly installed
+    try {
+      $smb1Feature = Get-WindowsOptionalFeature -Online -FeatureName smb1protocol -ErrorAction SilentlyContinue
+      if ($smb1Feature -and $smb1Feature.State -eq 'Enabled') {
+        Write-Log "SMB1 protocol is now properly installed and enabled" -Level SUCCESS
+      } else {
+        Write-Log "SMB1 protocol installation may not be complete" -Level WARNING
+      }
+    }
+    catch {
+      Write-Log "Could not verify SMB1 installation status: $_" -Level WARNING
+    }
+    
+    # Now apply SMB configurations that require SMB1 to be fully installed
+    Write-Log "Applying SMB vulnerability configurations..." -Level INFO
+    try {
+      # Apply the SMB configurations that were skipped during initial install
+      Set-SmbServerConfiguration -AnnounceServer $true -EnableSecuritySignature $false -EnableSMB1Protocol $true -ServerHidden $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB server announcement and SMB1 protocol configured" -Level INFO } else { Write-Log "Failed to configure SMB server announcement" -Level WARNING }
+      
+      Set-SmbServerConfiguration -EnableStrictNameChecking $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB strict name checking disabled" -Level INFO } else { Write-Log "Failed to disable SMB strict name checking" -Level WARNING }
+      
+      Set-SmbServerConfiguration -ValidateTargetName $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB target name validation disabled" -Level INFO } else { Write-Log "Failed to disable SMB target name validation" -Level WARNING }
+      
+      Set-SmbServerConfiguration -EnableAuthRateLimiter $false -ErrorAction SilentlyContinue
+      if ($?) { Write-Log "SMB authentication rate limiter disabled" -Level INFO } else { Write-Log "Failed to disable SMB auth rate limiter" -Level WARNING }
+      
+      Write-Log "SMB vulnerability configurations applied successfully" -Level SUCCESS
+    }
+    catch {
+      Write-Log "Error applying SMB configurations: $_" -Level WARNING
+    }
+    
+    # Continue with the rest of the vulnerability configuration
+    Write-Log "Continuing with remaining vulnerability configurations..." -Level INFO
+    
+    # Clean up state file and complete setup
+    Remove-Item -Path $stateFile -Force -ErrorAction SilentlyContinue
+    
+    Write-Log "SMB1 post-installation configuration completed successfully!" -Level SUCCESS
+    Write-Log "SMB1 protocol is now available for penetration testing scenarios." -Level INFO
   }
   elseif ($state.Step -eq 'PreInstall') {
     Write-Log "Found pre-install state. Proceeding with AD installation..." -Level INFO
